@@ -1,0 +1,101 @@
+---
+layout: post
+title:  "Building embedded Linux with Yocto, part 1"
+date:   2022-06-19 00:00:00 +0000
+categories: update
+---
+
+# Introduction
+[Yocto](https://www.yoctoproject.org) is a powerful tool for creating custom embedded Linux distributions.
+Let's jump right in with a practical example, building a minimal image for the open hardware [BeagleBoard X15](https://beagleboard.org/x15)
+
+# Why Yocto
+
+Yocto makes cross compiling complex software easy.
+Stop compiling your projects on target, it's not worth the time.
+If your build sometimes fails because of `ulimit`, it's time to find a better solution.
+
+Cross compiling isn't as simple as just running `gcc-arm-none-linux-gnueabihf` either.
+You need to make sure versions of key libraries like boost and libc are all compatible.
+
+Yocto is based on the idea of layers, which contain recipes for packages.
+Recipes generally fetch source from a git commit.
+Track the recipes in git as well, and you have a pretty good degree of reproducibility.
+
+Yocto has drawbacks too.
+The `bitbake` tool can take a long time (10s of seconds) to query package information.
+The recipe system has confusing syntax.
+
+That said, I think most developers will be much more productive with Yocto.
+
+# Setup
+My [git repo](https://github.com/ahepp/x15) has a Dockerfile I've been using to build this project.
+Even if you don't want to use Docker, the Dockerfile is a good starting point for configuring a baremetal or virtual build machine.
+
+I'm bind mounting my working directory to the container.
+Because I'm working on a MacOS computer with a case insensitive filesystem, I'm also binding a volume to `/ws/x15/`.
+You probably don't need to do this, although Docker bind mounts can behave strangely on non-Linux systems.
+
+To build and run the Dockerfile:
+
+    $ docker build . -t $X15_IMAGE
+    $ docker run -it -v $(pwd):/ws -v $X15_VOLUME:/ws/x15 $X15_IMAGE
+
+This hasn't been tested on many machines.
+If you run into issues, feel free to raise a GitHub issue, or email me, etc.
+
+# Fetching
+The following steps can be run automatically with `./scripts/fetch.sh`
+
+We will fetch the Yocto reference distribution "poky", as well as TI's layer (which depends on the ARM layer).
+
+    $ mkdir -p /ws/x15/sources
+    $ git clone -b kirkstone git://git.yoctoproject.org/poky     /ws/x15/sources/poky
+    $ git clone -b kirkstone git://git.yoctoproject.org/meta-ti  /ws/x15/sources/meta-ti
+    $ git clone -b kirkstone git://git.yoctoproject.org/meta-arm /ws/x15/sources/meta-arm
+    $ mkdir -p /ws/x15/build/conf
+    $ cp /ws/conf/* /ws/x15/build/conf/
+
+Our configuration directory has two files in it.
+`bblayers.conf` describes the location of bitbake layers, which contain recipes for the packages we'll use to create our OS image.
+`local.conf` contains settings such as the machine we're building for, which modifies the behavior of recipes.
+
+# Building
+As before, the following steps can be run automatically with `./scripts/build.sh`
+
+Source the openembedded configuration script, and tell it your build directory:
+
+    $ . /ws/x15/sources/pokey/meta/oe-init-build-env /ws/x15/build
+
+Then kick off a build:
+
+    $ bitbake core-image-minimal
+
+
+The build will take an hour or more, even on a powerful dev machine.
+On an AWS c6g4xlarge, it takes about 45 minutes.
+
+# Flashing
+We'll end up with a file:
+
+    /ws/x15/build/tmp/deploy/images/beagle-x15/core-image-minimal-beagle-x15.wic.xz
+
+And an associated .bmap file.
+We can flash these to an SD card with `bmaptool`.
+    
+
+# Running
+Unfortunately, the image I produced didn't boot on my BeagleBoard x15.
+u-boot was looking in the wrong place for the kernel, and using the wrong mmc partition as root.
+I solved this by mounting `/dev/mmcblk0p1` and adding `/uEnv.txt` as follows:
+
+    mmcdev=0
+    bootpart=0:1
+    bootdir=
+    args_mmc=run finduuid;setenv bootargs console=${console} ${optargs} root=/dev/mmcblk0p2 rw rootfstype=${mmcrootfstype}
+
+I haven't modified any of the u-boot settings on my BeagleBoard, so I'm a bit disappointed the image didn't boot out of the box.
+This is a good opportunity for a follow-up post finding the root cause, fixing it, and maybe if we're lucky submitting a patch.
+
+After fixing the boot issues, my image is working nicely. In a future post, we'll expand this project with a custom layer and add useful
+
